@@ -12,7 +12,11 @@
   input { width:9em; padding:6px; font-size:16px; text-transform:uppercase; }
   button { padding:6px 14px; font-size:16px; }
   #status { color:var(--muted); font-size:14px; }
-  #screen { display:block; width:100%; height:auto; }
+  #screen { display:block; margin:0 auto; }
+  /* 顯示方式：填滿寬度 / 整個畫面 (不用捲動) / 原始大小 (1280 寬，跟著瀏覽器縮放、手機可以兩指放大) */
+  #screen.width { width:100%; height:auto; }
+  #screen.fit { max-width:100%; max-height:calc(100vh - 60px); width:auto; height:auto; }
+  #screen.real { width:auto; height:auto; }
 </style>
 </head>
 <body>
@@ -21,6 +25,11 @@
   <input id="pass" placeholder="密碼" autocomplete="off">
   <button id="go">連線</button>
   <select id="screens" hidden></select>
+  <select id="fit">
+    <option value="width">填滿寬度</option>
+    <option value="fit">整個畫面</option>
+    <option value="real">原始大小</option>
+  </select>
   <span id="status">輸入房間碼與密碼</span>
 </div>
 <img id="screen" alt="">
@@ -52,8 +61,10 @@ async function decrypt(key, text) {
   return JSON.parse(dec.decode(await pipe(new Uint8Array(plain), new DecompressionStream("deflate-raw"))));
 }
 
+const STUN = ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
+const TRIES = 3;          // 連不上自動重試幾次 (手機網路打洞時好時壞，重新來過常常就通)
 let pc, es;
-async function connect(room, pass) {
+async function connect(room, pass, attempt = 1) {
   room = room.trim().toUpperCase(); pass = pass.trim().toUpperCase();
   if (!room || !pass) { status("請輸入房間碼與密碼"); return; }
   try { localStorage.setItem("lash-room", room); } catch {}
@@ -62,12 +73,27 @@ async function connect(room, pass) {
   const topic = "lash-" + hex(await sha256("lash-topic:" + room)).slice(0, 24);
   const key = await crypto.subtle.importKey("raw", await sha256("lash-key:" + room + ":" + pass), "AES-GCM", false, ["encrypt", "decrypt"]);
   const id = hex(crypto.getRandomValues(new Uint8Array(6)));
+  const tag = attempt > 1 ? ` (重試 ${attempt - 1}/${TRIES - 1})` : "";
 
-  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  pc.onconnectionstatechange = () => {
-    status({ connecting: "連線中...", connected: "已連線", disconnected: "斷線", failed: "連不上 (雙方網路可能都不允許直連)", closed: "已關閉" }[pc.connectionState] || pc.connectionState);
+  const me = pc = new RTCPeerConnection({ iceServers: [{ urls: STUN }] });
+  const cands = { host: 0, srflx: 0 };
+  let wasConnected = false;
+  me.onicecandidate = e => { if (e.candidate && e.candidate.type in cands) cands[e.candidate.type]++; };
+  me.onconnectionstatechange = () => {
+    if (pc !== me) return;   // 已經重連，舊的不管
+    const st = me.connectionState;
+    if (st === "connected") wasConnected = true;
+    if (st === "failed") {
+      // 連過又斷 (例如手機從 Wi-Fi 換到 4G) 從頭重連；沒連上過就重試到 TRIES 次
+      if (wasConnected) { status("斷線，重新連線..."); run(room, pass, 1); return; }
+      if (attempt < TRIES) { status(`連不上，自動重試...`); run(room, pass, attempt + 1); return; }
+      status(cands.srflx ? "連不上 (雙方網路不允許直連，換個網路再試，例如 Wi-Fi / 4G 互換)"
+                         : "連不上 (這台裝置查不到自己的外網位址，換個網路再試)");
+      return;
+    }
+    status(({ connecting: "連線中...", connected: "已連線", disconnected: "訊號不穩，等待恢復...", closed: "已關閉" }[st] || st) + tag);
   };
-  const dc = pc.createDataChannel("screen");
+  const dc = me.createDataChannel("screen");
   dc.binaryType = "arraybuffer";
   let frames = new Map(), shown = -1, url = null, count = 0;
   dc.onmessage = e => {
@@ -85,36 +111,44 @@ async function connect(room, pass) {
     url = URL.createObjectURL(new Blob(parts.data, { type: "image/jpeg" }));
     $("screen").src = url;
     if (++count === 1) status("已連線");
-    document.title = "遠端畫面 (" + count + ")";
+    document.title = "遠端畫面 (" + count + ")";   // 收到幾張畫面
   };
 
-  await pc.setLocalDescription(await pc.createOffer());
+  status("查詢網路位址..." + tag);
+  await me.setLocalDescription(await me.createOffer());
+  // 等網路位址收集完再送出。手機網路查外網位址 (srflx) 可能要好幾秒，沒等到就送出一定打不通：
+  // 收集完成就送；查到外網位址後最多再等 1.5 秒 (等另一台 STUN)；最多等 10 秒
   await new Promise(r => {
-    if (pc.iceGatheringState === "complete") return r();
-    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") r(); };
-    setTimeout(r, 5000);
+    const t0 = Date.now();
+    let srflxAt = 0;
+    const timer = setInterval(() => {
+      if (cands.srflx && !srflxAt) srflxAt = Date.now();
+      if (me.iceGatheringState === "complete" || (srflxAt && Date.now() - srflxAt > 1500) || Date.now() - t0 > 10000) { clearInterval(timer); r(); }
+    }, 100);
   });
+  if (pc !== me) return;
 
-  status("等待分享端回應...");
-  es = new EventSource(`${NTFY}/${topic}/sse`);
-  const opened = new Promise(r => { es.onopen = r; });
-  es.onmessage = async e => {
+  status("等待分享端回應..." + tag);
+  const myEs = es = new EventSource(`${NTFY}/${topic}/sse`);
+  const opened = new Promise(r => { myEs.onopen = r; });
+  myEs.onmessage = async e => {
     const m = JSON.parse(e.data);
     if (m.event !== "message") return;
     let msg;
     try { msg = await decrypt(key, m.message); } catch { return; }
     if (msg.t !== "answer" || msg.id !== id) return;
-    es.close();
-    status("連線中...");
-    await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+    myEs.close();
+    if (pc !== me) return;
+    status("連線中..." + tag);
+    await me.setRemoteDescription({ type: "answer", sdp: msg.sdp });
   };
   await opened;
-  const body = await encrypt(key, { t: "offer", id, sdp: pc.localDescription.sdp });
+  const body = await encrypt(key, { t: "offer", id, sdp: me.localDescription.sdp });
   await fetch(`${NTFY}/${topic}`, { method: "POST", body });
-  setTimeout(() => { if (pc.connectionState === "new" && es.readyState !== 2) status("分享端沒有回應 (程式沒開，或房間碼 / 密碼錯了)"); }, 15000);
+  setTimeout(() => { if (pc === me && me.connectionState === "new" && myEs.readyState !== 2) status("分享端沒有回應 (程式沒開，或房間碼 / 密碼錯了)"); }, 15000);
 }
 
-const run = (r, p) => connect(r, p).catch(e => status("錯誤：" + e.message));
+const run = (r, p, attempt) => connect(r, p, attempt).catch(e => status("錯誤：" + e.message));
 // 分享端傳來螢幕清單 → 下拉選單；選了就請分享端換螢幕 (記住上次選的)
 function showScreens(dc, m) {
   if (m.t !== "screens") return;
@@ -133,6 +167,13 @@ function showScreens(dc, m) {
   sel.onchange = choose;
   choose();
 }
+
+// 顯示方式 (記住上次選的)
+const fit = $("fit");
+try { fit.value = localStorage.getItem("lash-fit") || "width"; } catch {}
+const applyFit = () => { $("screen").className = fit.value; try { localStorage.setItem("lash-fit", fit.value); } catch {} };
+fit.onchange = applyFit;
+applyFit();
 
 $("go").onclick = () => run($("room").value, $("pass").value);
 try { $("room").value = localStorage.getItem("lash-room") || ""; } catch {}
