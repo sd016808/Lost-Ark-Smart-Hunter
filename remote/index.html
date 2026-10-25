@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>遠端畫面</title>
+<style>
+  :root { --bg:#111; --fg:#eee; --muted:#999; --accent:#4a9; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui, "Microsoft JhengHei", sans-serif; }
+  #bar { display:flex; flex-wrap:wrap; gap:8px; padding:8px 16px; align-items:center; }
+  select { padding:6px; font-size:16px; }
+  input { width:9em; padding:6px; font-size:16px; text-transform:uppercase; }
+  button { padding:6px 14px; font-size:16px; }
+  #status { color:var(--muted); font-size:14px; }
+  #screen { display:block; width:100%; height:auto; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <input id="room" placeholder="房間碼" autocomplete="off">
+  <input id="pass" placeholder="密碼" autocomplete="off">
+  <button id="go">連線</button>
+  <select id="screens" hidden></select>
+  <span id="status">輸入房間碼與密碼</span>
+</div>
+<img id="screen" alt="">
+<script>
+const NTFY = "https://ntfy.sh";
+const $ = id => document.getElementById(id);
+const status = s => { $("status").textContent = s; };
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+async function sha256(s) { return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(s))); }
+const hex = b => [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+const b64 = b => btoa(String.fromCharCode(...b));
+const unb64 = s => Uint8Array.from(atob(s.trim()), c => c.charCodeAt(0));
+
+async function pipe(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+// 跟分享端相同：deflate-raw 壓縮 → AES-GCM → base64(iv | 密文 | tag)
+async function encrypt(key, obj) {
+  const plain = await pipe(enc.encode(JSON.stringify(obj)), new CompressionStream("deflate-raw"));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain));
+  const all = new Uint8Array(12 + ct.length); all.set(iv); all.set(ct, 12);
+  return b64(all);
+}
+async function decrypt(key, text) {
+  const all = unb64(text);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.slice(0, 12) }, key, all.slice(12));
+  return JSON.parse(dec.decode(await pipe(new Uint8Array(plain), new DecompressionStream("deflate-raw"))));
+}
+
+let pc, es;
+async function connect(room, pass) {
+  room = room.trim().toUpperCase(); pass = pass.trim().toUpperCase();
+  if (!room || !pass) { status("請輸入房間碼與密碼"); return; }
+  try { localStorage.setItem("lash-room", room); } catch {}
+  if (pc) pc.close();
+  if (es) es.close();
+  const topic = "lash-" + hex(await sha256("lash-topic:" + room)).slice(0, 24);
+  const key = await crypto.subtle.importKey("raw", await sha256("lash-key:" + room + ":" + pass), "AES-GCM", false, ["encrypt", "decrypt"]);
+  const id = hex(crypto.getRandomValues(new Uint8Array(6)));
+
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  pc.onconnectionstatechange = () => {
+    status({ connecting: "連線中...", connected: "已連線", disconnected: "斷線", failed: "連不上 (雙方網路可能都不允許直連)", closed: "已關閉" }[pc.connectionState] || pc.connectionState);
+  };
+  const dc = pc.createDataChannel("screen");
+  dc.binaryType = "arraybuffer";
+  let frames = new Map(), shown = -1, url = null, count = 0;
+  dc.onmessage = e => {
+    if (typeof e.data === "string") { showScreens(dc, JSON.parse(e.data)); return; }
+    const v = new DataView(e.data);
+    const f = v.getUint32(0, true), i = v.getUint16(4, true), n = v.getUint16(6, true);
+    if (f <= shown) return;
+    let parts = frames.get(f);
+    if (!parts) { parts = { n, got: 0, data: new Array(n) }; frames.set(f, parts); }
+    if (!parts.data[i]) { parts.data[i] = new Uint8Array(e.data, 8); parts.got++; }
+    if (parts.got < parts.n) return;
+    for (const k of frames.keys()) if (k <= f) frames.delete(k);
+    shown = f;
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(new Blob(parts.data, { type: "image/jpeg" }));
+    $("screen").src = url;
+    if (++count === 1) status("已連線");
+    document.title = "遠端畫面 (" + count + ")";
+  };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(r => {
+    if (pc.iceGatheringState === "complete") return r();
+    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") r(); };
+    setTimeout(r, 5000);
+  });
+
+  status("等待分享端回應...");
+  es = new EventSource(`${NTFY}/${topic}/sse`);
+  const opened = new Promise(r => { es.onopen = r; });
+  es.onmessage = async e => {
+    const m = JSON.parse(e.data);
+    if (m.event !== "message") return;
+    let msg;
+    try { msg = await decrypt(key, m.message); } catch { return; }
+    if (msg.t !== "answer" || msg.id !== id) return;
+    es.close();
+    status("連線中...");
+    await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+  };
+  await opened;
+  const body = await encrypt(key, { t: "offer", id, sdp: pc.localDescription.sdp });
+  await fetch(`${NTFY}/${topic}`, { method: "POST", body });
+  setTimeout(() => { if (pc.connectionState === "new" && es.readyState !== 2) status("分享端沒有回應 (程式沒開，或房間碼 / 密碼錯了)"); }, 15000);
+}
+
+const run = (r, p) => connect(r, p).catch(e => status("錯誤：" + e.message));
+// 分享端傳來螢幕清單 → 下拉選單；選了就請分享端換螢幕 (記住上次選的)
+function showScreens(dc, m) {
+  if (m.t !== "screens") return;
+  const sel = $("screens");
+  sel.innerHTML = "";
+  for (const s of m.list) sel.add(new Option(`螢幕 ${s.i + 1}${s.primary ? " (主)" : ""} ${s.w}x${s.h}`, s.i));
+  let want = null;
+  try { want = localStorage.getItem("lash-screen"); } catch {}
+  const pick = m.list.find(s => String(s.i) === want) || m.list.find(s => s.primary) || m.list[0];
+  sel.value = pick.i;
+  sel.hidden = m.list.length < 2;
+  const choose = () => {
+    try { localStorage.setItem("lash-screen", sel.value); } catch {}
+    dc.send(JSON.stringify({ t: "screen", i: Number(sel.value) }));
+  };
+  sel.onchange = choose;
+  choose();
+}
+
+$("go").onclick = () => run($("room").value, $("pass").value);
+try { $("room").value = localStorage.getItem("lash-room") || ""; } catch {}
+// 網址可帶 #房間碼/密碼 直接連線 (方便加入書籤)
+const h = decodeURIComponent(location.hash.slice(1)).split("/");
+if (h.length === 2) { $("room").value = h[0]; $("pass").value = h[1]; run(h[0], h[1]); }
+</script>
+</body>
+</html>
