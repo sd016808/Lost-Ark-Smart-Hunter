@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Hunter 架構圖</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 版面：左側固定目錄 + 右側一張一張的圖；每張圖有自己的縮放，寬圖在自己的框裡橫向捲動 */
+:root {
+  --bg: #f6f4ef; --panel: #fffdf9; --fg: #26231d; --muted: #6f685b; --line: #d9d3c6;
+  --accent: #1f6f8b; --accent-ink: #ffffff; --chip: #e8e2d4;
+  --font: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #1b1d21; --panel: #23262c; --fg: #e8e4dc; --muted: #a39d92; --line: #3a3e46; --accent: #6fb7d1; --accent-ink: #101418; --chip: #2f333b; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #1b1d21; --panel: #23262c; --fg: #e8e4dc; --muted: #a39d92; --line: #3a3e46; --accent: #6fb7d1; --accent-ink: #101418; --chip: #2f333b; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font); line-height: 1.5; }
+.wrap { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; padding-block: 20px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+nav { position: sticky; top: calc(12px + env(safe-area-inset-top, 0px)); align-self: start; display: flex; flex-direction: column; gap: 4px; }
+nav h1 { font-size: 15px; margin: 0 0 6px; letter-spacing: .02em; }
+nav p { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+nav a { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; color: var(--fg); text-decoration: none; font-size: 13px; }
+nav a:hover, nav a:focus-visible { background: var(--chip); outline: none; }
+nav a.active { background: var(--accent); color: var(--accent-ink); }
+nav a.active .kind { color: var(--accent-ink); opacity: .8; }
+.num { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+nav a.active .num { color: var(--accent-ink); }
+.kind { font-size: 11px; color: var(--muted); letter-spacing: .05em; }
+.ghost { margin-top: 10px; }
+main { min-width: 0; display: flex; flex-direction: column; gap: 28px; }
+.dia header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.dia h2 { font-size: 17px; margin: 0; text-wrap: balance; display: flex; gap: 10px; align-items: baseline; }
+.tools { display: flex; align-items: center; gap: 4px; }
+button { font: inherit; font-size: 13px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+output { font-family: var(--mono); font-size: 12px; min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+.viewport { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 78vh; padding: 16px; }
+.canvas { width: max-content; min-width: 100%; zoom: 1; }
+pre.mermaid { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+pre.mermaid svg { max-width: none !important; height: auto; }
+.hint { font-size: 12px; color: var(--muted); margin: 0; }
+@media (max-width: 760px) {
+  .wrap { grid-template-columns: 1fr; }
+  nav { position: static; }
+  .viewport { max-height: 70vh; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+<div class="wrap">
+  <nav aria-label="圖的目錄">
+    <h1>Smart Hunter 架構圖</h1>
+    <p>來源：<code>Docs/Design/架構圖.md</code>，2026-10-28 重構後。</p>
+    <a href="#d1" data-id="d1"><span class="num">1</span>分層與執行緒<span class="kind">流程</span></a><a href="#d2" data-id="d2"><span class="num">2</span>任務啟動與停止 (時序)<span class="kind">時序</span></a><a href="#d3" data-id="d3"><span class="num">3</span>每日混沌副本：一隻角色的流程 (時序)<span class="kind">時序</span></a><a href="#d4" data-id="d4"><span class="num">4</span>重播主迴圈 (ReplayRouteTask.Run 每一幀)<span class="kind">流程</span></a><a href="#d5" data-id="d5"><span class="num">5</span>看到傳送門直衝互動點 (狀態)<span class="kind">狀態</span></a><a href="#d6" data-id="d6"><span class="num">6</span>地獄：一層與一場 (狀態)<span class="kind">狀態</span></a><a href="#d7" data-id="d7"><span class="num">7</span>樂園 (天堂)：一隻角色 (狀態)<span class="kind">狀態</span></a><a href="#d8" data-id="d8"><span class="num">8</span>畫面辨識的資料流<span class="kind">流程</span></a>
+    <button type="button" id="theme" class="ghost">亮 / 暗</button>
+    <p class="hint" style="margin-top:10px">滾輪在框內上下捲、Shift+滾輪橫向捲；拖曳捲軸看寬圖。</p>
+  </nav>
+  <main>
+<section class="dia" id="d1">
+  <header>
+    <h2><span class="num">1</span>分層與執行緒</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z1">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">flowchart TB
+    subgraph 主執行緒
+        HK[HotkeyListener&lt;br/&gt;全域快捷鍵訊息迴圈] --&gt;|F5~F11| BC[BotController]
+        BC --&gt;|AttachGame：找 LOSTARK 視窗&lt;br/&gt;視窗換了 / 大小變了就重建座標| CTX[BotContext]
+        BC --&gt;|Start / Stop| TR[TaskRunner&lt;br/&gt;一次只跑一個任務]
+    end
+    subgraph 任務執行緒
+        TR --&gt; T{IBotTask}
+        T --&gt; DC[DailyChaosTask&lt;br/&gt;Ctrl+F10]
+        T --&gt; PT[ParadiseTask&lt;br/&gt;Ctrl+F8]
+        T --&gt; HT[HellTask&lt;br/&gt;Ctrl+F5]
+        T --&gt; RT[ReplayRouteTask&lt;br/&gt;F10]
+        T --&gt; RC[RecordRouteTask&lt;br/&gt;F9]
+        DC &amp; PT &amp; HT --&gt; ST[Tasks/Shared&lt;br/&gt;UiActions / CharacterSwitcher&lt;br/&gt;CharacterList / MonsterChaser]
+        DC --&gt; RT
+    end
+    subgraph 戰鬥執行緒
+        CC[CombatController&lt;br/&gt;每 50ms 看 BotStatus.CanCast]
+    end
+    subgraph 其他執行緒
+        DB[ConsoleDashboard&lt;br/&gt;每 100ms 畫狀態]
+        OV[Overlay&lt;br/&gt;遊戲上的透明層]
+    end
+    ST &amp; RT &amp; RC --&gt; V[Vision&lt;br/&gt;UiTemplates 特徵圖 / PaddleOcr / TextOcr&lt;br/&gt;HellScreen / ParadiseScreen / MinimapLocalizer]
+    RT &amp; RC --&gt; NAV[Navigation&lt;br/&gt;RouteNavigator / RouteRecorder / RouteRepository]
+    V --&gt; INF[Infrastructure&lt;br/&gt;GameWindow 截圖 / UiLayout 座標&lt;br/&gt;InputSimulator 滑鼠鍵盤 / Gamepad 虛擬搖桿&lt;br/&gt;BotClock 可暫停時鐘]
+    NAV --&gt; INF
+    CC --&gt; INF
+    T -.寫旗標.-&gt; BS[(BotStatus)]
+    BS -.讀.-&gt; CC &amp; DB
+    DC &amp; PT &amp; HT --&gt;|每場寫一行 jsonl| STATS[&quot;Stats&lt;br/&gt;stats/*.jsonl → 結算表 + reports/*.html&quot;]</pre></div></div>
+</section>
+<section class="dia" id="d2">
+  <header>
+    <h2><span class="num">2</span>任務啟動與停止 (時序)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z2">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">sequenceDiagram
+    actor U as 使用者
+    participant HK as HotkeyListener (主執行緒)
+    participant BC as BotController
+    participant CTX as BotContext
+    participant TR as TaskRunner
+    participant T as 任務執行緒
+    participant CC as 戰鬥執行緒
+
+    U-&gt;&gt;HK: Ctrl+F10
+    HK-&gt;&gt;BC: ToggleDailyChaos()
+    BC-&gt;&gt;BC: 樂園 / 地獄正在跑？是 → 嗶兩聲不動作 (BlockedBy)
+    BC-&gt;&gt;CTX: AttachGame()
+    CTX-&gt;&gt;CTX: FindByProcess(&quot;LOSTARK&quot;) + ClientSize
+    alt 找不到視窗
+        CTX--&gt;&gt;BC: false → 提示、不開始
+    else 第一次 / 視窗換了 / 大小變了
+        CTX-&gt;&gt;CTX: 重建 UiLayout / UiTemplates / Finish / Portal / Input
+    end
+    BC-&gt;&gt;TR: Start(DailyChaosTask)
+    TR-&gt;&gt;TR: Stop() 上一個 (最多等 5 秒)
+    TR-&gt;&gt;T: new Thread(Run)
+    loop 任務中
+        T-&gt;&gt;T: Wait.For / UiActions (都看 ct 與 BotClock)
+        T--&gt;&gt;CC: BotStatus.ReplayActive / ArenaFighting = true
+        CC-&gt;&gt;CC: CanCast 成立就循環放技能
+    end
+    U-&gt;&gt;HK: F10
+    HK-&gt;&gt;BC: TogglePause → BotClock.Pause()
+    Note over T,CC: Wait.For 停在原地；Gamepad 一律送 0；CanCast = false
+    U-&gt;&gt;HK: Ctrl+F10
+    HK-&gt;&gt;BC: StopTask → Gamepad.ReleaseAll, TR.Stop()
+    TR-&gt;&gt;T: cts.Cancel() + BotClock.Resume()
+    alt 5 秒內停下來
+        TR--&gt;&gt;BC: true → 「已手動停止」
+    else 卡在 OCR 等不能中途取消的動作
+        TR--&gt;&gt;BC: false → 任務維持「執行中」，不能開新任務
+    end</pre></div></div>
+</section>
+<section class="dia" id="d3">
+  <header>
+    <h2><span class="num">3</span>每日混沌副本：一隻角色的流程 (時序)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z3">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">sequenceDiagram
+    participant DC as DailyChaosTask
+    participant CS as CharacterSwitcher
+    participant GF as GuildFlow
+    participant DE as DungeonEntry
+    participant RT as ReplayRouteTask
+    participant RP as DailyRunReport
+
+    DC-&gt;&gt;CS: SwitchTo(slot)
+    CS-&gt;&gt;CS: 列表沒開 → ESC → 「立即使用其他角色登入」&lt;br/&gt;讀「登入中」是第幾隻 (LastRunCheck.Verify 上一隻次數有沒有扣)
+    CS-&gt;&gt;CS: 捲到 slot、點角色格、等面板名字變&lt;br/&gt;PaddleOCR 讀「混沌副本 A/B」
+    alt A 小於 100
+        CS--&gt;&gt;DC: loggedIn = false (列表不關，直接看下一隻)
+        DC-&gt;&gt;RP: row.Skip
+    else A 大於等於 100
+        CS-&gt;&gt;CS: 登入 → 確認 → WaitForLoading
+        CS--&gt;&gt;DC: loggedIn = true
+        DC-&gt;&gt;GF: Run (簽到一定做；guildDonate 才捐銀幣)
+        GF--&gt;&gt;DC: GuildResult (失敗只跳過，不影響副本)
+        DC-&gt;&gt;DE: Enter(wanted 或 null = 自動)
+        DE-&gt;&gt;DE: Alt+Q 戰況板 → 節點 → 庫爾湛視窗 → 領每週獎勵&lt;br/&gt;→ 左側列表 (OCR 確認) → 無法入場？換下一個 → 入場 → 接受
+        DE--&gt;&gt;DC: 進了哪個副本 (或 null = 只做公會)
+        DC-&gt;&gt;RT: Run (Quiet) 直到結算 / 倒數 00:00 / 逾時
+        RT--&gt;&gt;DC: ReplayOutcome (通關、時間、死亡、片鱗)
+        DC-&gt;&gt;RP: RecordRun → stats/yyyy-MM.jsonl
+        DC-&gt;&gt;CS: lastRun.RunFinished (下次開列表時確認次數已扣)
+    end
+    DC-&gt;&gt;RP: Finish → 主控台結算表 + reports/*.html</pre></div></div>
+</section>
+<section class="dia" id="d4">
+  <header>
+    <h2><span class="num">4</span>重播主迴圈 (ReplayRouteTask.Run 每一幀)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z4">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">flowchart TD
+    S([每幀 33ms]) --&gt; F{每 15 幀&lt;br/&gt;結算畫面？}
+    F --&gt;|是| DONE([通關，結束])
+    F --&gt;|否| D{每 30 幀&lt;br/&gt;死亡視窗？}
+    D --&gt;|是| REV[Revive：等「立即復活」可按 → 點&lt;br/&gt;10 秒不能按改「據點復活」→ 從最近點重走]
+    D --&gt;|否| TM{每 2 秒&lt;br/&gt;倒數 00:00&lt;br/&gt;連續 5 次？}
+    TM --&gt;|是| TO([時間到，結束])
+    TM --&gt;|否| MM[截小地圖 → MinimapLocalizer.Update&lt;br/&gt;local 搜尋 → 失敗才 global]
+    MM --&gt; SH[每 3 幀小地圖找片鱗&lt;br/&gt;每 6 幀畫面找片鱗名牌 → ShardTracker]
+    SH --&gt; NAV[RouteNavigator.Tick]
+    NAV --&gt; LS{目標是互動點 而且&lt;br/&gt;直衝中 或 20px 內&lt;br/&gt;頭上有 LS？}
+    LS --&gt;|是| RI
+    LS --&gt;|否| PR{每 5 幀：&lt;br/&gt;直衝中？}
+    PR --&gt;|否| CPR[CheckPortalRush&lt;br/&gt;見第 5 張]
+    PR --&gt;|是| WATCH[重新找傳送門畫疊加層&lt;br/&gt;1.5 秒看不到 → AbortRush]
+    NAV --&gt;|Finished| TAIL[路線走完：在最後 10 點來回打&lt;br/&gt;最多 5 分鐘]
+    NAV --&gt;|ReachedInteract| RI[RunInteraction&lt;br/&gt;按 LS → 位置移動 35px = 過圖&lt;br/&gt;沒過圖 → HomeToPortal 靠近再按，最多 5 次]
+    RI --&gt;|過圖| ADV[AdvanceAfterInteract&lt;br/&gt;ForceGlobal 重新定位]
+    RI --&gt;|沒過圖| RETRY[回前 15 點繞一圈清怪再試&lt;br/&gt;最多 5 分鐘後跳過]</pre></div></div>
+</section>
+<section class="dia" id="d5">
+  <header>
+    <h2><span class="num">5</span>看到傳送門直衝互動點 (狀態)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z5">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 照路線走
+    照路線走 --&gt; 靠近互動點: 小地圖座標到下一個互動點 ≤ 60 地圖 px
+    靠近互動點 --&gt; 照路線走: 畫面上有怪的血條 (怪沒清完)
+    靠近互動點 --&gt; 靠近互動點: 形狀 / 特徵圖認傳送門；方向要對、畫面距離 ÷ 地圖距離要在 15~60
+    靠近互動點 --&gt; 直衝: 形狀認出或分數 ≥ 0.85 一次就去；0.75~0.85 累積 2 次 (3 秒內)
+    直衝 --&gt; 到互動點: 頭上出現 LS，或小地圖到了
+    直衝 --&gt; 取消直衝: 連續 1.5 秒看不到傳送門也沒 LS
+    直衝 --&gt; 取消直衝: 20 秒走不到
+    到互動點 --&gt; 過圖: 按 LS 後位置移動超過 35px
+    到互動點 --&gt; 取消直衝: 畫面上沒傳送門也沒 LS，或按了沒過圖
+    取消直衝 --&gt; 照路線走: CancelRush：回直衝前的進度，從最近的點接回；同一互動點誤判 2 次就不再直衝
+    過圖 --&gt; 照路線走: 等畫面穩定 → 全域重新定位</pre></div></div>
+</section>
+<section class="dia" id="d6">
+  <header>
+    <h2><span class="num">6</span>地獄：一層與一場 (狀態)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z6">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 進場: 戰況板 → 樂園 → 地獄分頁 → 鑰匙 (綠、白、橘、紫、藍的順序，奈落不用) → 入場
+    進場 --&gt; 讀面板
+    state 讀面板 {
+        [*] --&gt; 樓層_可下墜_按鈕列
+    }
+    讀面板 --&gt; 等按鈕變灰: 剛落地按鈕還是上一層的亮
+    等按鈕變灰 --&gt; 打怪: 變灰 (有怪)
+    等按鈕變灰 --&gt; 清完: 8 秒都亮 (這層沒怪)
+    讀面板 --&gt; 祭壇: 11 的倍數 / 50 層，先找祭壇 (100 層打完王才找)
+    打怪 --&gt; 打怪: 原地 15 秒 → 繞場 (上右下左)；看到血條就追 (最多 20 秒，再冷卻 10 秒)
+    打怪 --&gt; 祭壇: 每秒看一次，看到紅球就先用
+    打怪 --&gt; 清完: 按鈕連續 3 次亮
+    打怪 --&gt; 整場打完: 「再次挑戰」灰「離開」亮
+    祭壇 --&gt; 清完: 走到 LS → 互動 → 跳視窗就放藍鑰匙淬鍊，沒跳 = 直接領獎
+    清完 --&gt; 找互動點: 停技能
+    找互動點 --&gt; 找互動點: 往上 → 上面挑 (綠優先) → 往左 → 往右；整數樓層前 2 輪只認綠
+    找互動點 --&gt; 打怪: 按鈕又變灰 (又有怪)
+    找互動點 --&gt; 走過去: 看到箭頭 (一路追同一個)
+    走過去 --&gt; 按互動: 90px 內、或頭上 LS / 「下降」
+    按互動 --&gt; 讀面板: 樓層變了 (等 2.5 秒落地)
+    按互動 --&gt; 找互動點: 15 秒沒變，最多 4 次
+    整場打完 --&gt; 開寶箱: 先看一遍 (上/左/右) 再照 chestPriority 挑；「再次挑戰」亮了才算開了
+    開寶箱 --&gt; 進場: 等 8 秒 → 再次挑戰 → 選鑰匙
+    開寶箱 --&gt; [*]: 沒有鑰匙 → 離開 → 換下一隻角色</pre></div></div>
+</section>
+<section class="dia" id="d7">
+  <header>
+    <h2><span class="num">7</span>樂園 (天堂)：一隻角色 (狀態)</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z7">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 角色列表: ESC → 讀右側面板「樂園 A/B」
+    角色列表 --&gt; [*]: A = 0 不登入 (列表不關看下一隻)
+    角色列表 --&gt; 樂園視窗: 登入 → 戰況板 → 樂園
+    樂園視窗 --&gt; 樂園視窗: 點「天堂」分頁到變金色 → 選最高階段
+    樂園視窗 --&gt; [*]: 入場灰 (次數讀到大於 0 時還是按按看，沒跳確認視窗才算沒次數)
+    樂園視窗 --&gt; 副本中: 入場 → 接受 → 讀取
+    副本中 --&gt; 往上走: 剛進場往正上方走 3 秒 (王在北邊)
+    往上走 --&gt; 打怪
+    打怪 --&gt; 打怪: 每 0.2 秒找血條，看到約每秒推一下；有王圖示時目標在血條下方 330px；3 秒沒血條輪流上左下右挪；遊戲自動重複下一場
+    打怪 --&gt; 打完: 「離開」亮 + 「再次挑戰」灰，連續 2 次；(或 OCR 次數 0/5；或「離開」持續 15 秒)
+    打完 --&gt; [*]: 等 2 秒撿東西 → 離開 → 確認 → 讀取 → 下一隻</pre></div></div>
+</section>
+<section class="dia" id="d8">
+  <header>
+    <h2><span class="num">8</span>畫面辨識的資料流</h2>
+    <div class="tools" role="group" aria-label="縮放">
+      <button type="button" data-act="out" aria-label="縮小">−</button>
+      <output id="z8">100%</output>
+      <button type="button" data-act="in" aria-label="放大">+</button>
+      <button type="button" data-act="fit">符合寬度</button>
+      <button type="button" data-act="reset">100%</button>
+    </div>
+  </header>
+  <div class="viewport"><div class="canvas"><pre class="mermaid">flowchart LR
+    GW[GameWindow.Capture&lt;br/&gt;client 座標的一塊 BGR Mat] --&gt; UL
+    UL[UiLayout&lt;br/&gt;2560x1440 基準座標 × 視窗比例] --&gt; UT[&quot;UiTemplates.Find&lt;br/&gt;特徵圖 ±25% 多尺度比對&lt;br/&gt;記住上次成功倍率&quot;] --&gt; AN[UiMatch 錨點&lt;br/&gt;Center / Score / Scale]
+    AN --&gt;|FromAnchor 推算| BTN[按鈕 / 文字區塊的位置]
+    BTN --&gt; OCR{讀字}
+    OCR --&gt;|名字 / 次數 / 副本名 / 樓層| PO[PaddleOcr&lt;br/&gt;PP-OCRv5，OpenCV DNN，編進 exe]
+    OCR --&gt;|血量 / 倒數 / 捐贈「銀」| WO[TextOcr&lt;br/&gt;Windows OCR，3 秒逾時]
+    BTN --&gt; COL[顏色 / 亮度判斷&lt;br/&gt;按鈕金色 vs 灰、白字比例、紅色的 0]
+    GW --&gt;|整張| REF[HellScreen.ToReference&lt;br/&gt;縮成 2560 寬] --&gt; SHAPE[顏色遮罩 → 連通區塊 → 形狀規則&lt;br/&gt;地獄箭頭 / 傳送門 / 血條 / 紅球 / 寶箱名牌]
+    GW --&gt;|小地圖| MM[縮成 392x348 → 抽地板前景&lt;br/&gt;MinimapLocalizer 在 3072² 畫布上定位]
+    PO &amp; WO &amp; COL &amp; SHAPE &amp; MM --&gt; DEC[任務的判斷]
+    DEC --&gt; IN[InputSimulator&lt;br/&gt;滑鼠鍵盤：選單]
+    DEC --&gt; GP[Gamepad&lt;br/&gt;虛擬搖桿：走路、技能、LS 互動]
+    DEC --&gt; OVL[Overlay&lt;br/&gt;畫在遊戲上，截圖看不到]</pre></div></div>
+</section></main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.1/mermaid.min.js"></script>
+<script>
+  // 每張圖獨立縮放 (CSS zoom)，「符合寬度」依框寬與圖寬算
+  const Z = { min: 0.4, max: 3, step: 0.15 };
+  document.querySelectorAll('.dia').forEach(sec => {
+    const canvas = sec.querySelector('.canvas'), out = sec.querySelector('output'), view = sec.querySelector('.viewport');
+    let z = 1;
+    const apply = () => { canvas.style.zoom = z; out.value = Math.round(z * 100) + '%'; };
+    sec.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', () => {
+      const act = b.dataset.act;
+      if (act === 'in') z = Math.min(Z.max, z + Z.step);
+      else if (act === 'out') z = Math.max(Z.min, z - Z.step);
+      else if (act === 'reset') z = 1;
+      else if (act === 'fit') {
+        canvas.style.zoom = 1;
+        const svg = canvas.querySelector('svg');
+        const w = svg ? (svg.getBoundingClientRect().width || svg.scrollWidth) : canvas.scrollWidth;
+        z = Math.max(Z.min, Math.min(Z.max, (view.clientWidth - 34) / Math.max(w, 1)));
+      }
+      apply();
+    }));
+  });
+  // 目錄高亮目前看到的圖 (hash 只用 #d1 這種純名稱)
+  const links = [...document.querySelectorAll('nav a[data-id]')];
+  const mark = id => links.forEach(a => a.classList.toggle('active', a.dataset.id === id));
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) mark(e.target.id); }), { rootMargin: '-30% 0px -60% 0px' });
+  document.querySelectorAll('.dia').forEach(s => io.observe(s));
+  if (/^#d[1-8]$/.test(location.hash)) mark(location.hash.slice(1)); else mark('d1');
+  
+  // 本機版：依主題初始化 Mermaid 再畫；切換主題時用原始文字重畫
+  const sources = [...document.querySelectorAll('pre.mermaid')].map(p => p.textContent);
+  async function render() {
+    const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'neutral', securityLevel: 'loose', fontFamily: 'Noto Sans TC, system-ui, sans-serif' });
+    const pres = document.querySelectorAll('pre.mermaid');
+    pres.forEach((p, i) => { p.removeAttribute('data-processed'); p.textContent = sources[i]; });
+    try { await mermaid.run({ nodes: pres }); } catch (e) { console.error(e); }
+  }
+  document.getElementById('theme').addEventListener('click', () => {
+    const r = document.documentElement; const dark = r.dataset.theme === 'dark' || (!r.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    r.dataset.theme = dark ? 'light' : 'dark'; render();
+  });
+  render();
+</script>
+</head>
+</html>
